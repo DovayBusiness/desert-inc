@@ -3,8 +3,12 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import gsap from 'gsap';
 
-const REST_POSITION = new THREE.Vector3(0, 1.3, 6.8);
-const REST_LOOKAT_Y = 1.5;
+// Pulled back from the brief's literal (0, 1.3, 6.8): at fov 35 that distance
+// only fit a handful of the bottom courses on screen — the pyramid (5 tall,
+// 6 wide) needs real room to read as a whole shape, not a wall of oversized
+// blocks. This distance/height frames the full pyramid with margin.
+const REST_POSITION = new THREE.Vector3(0, 2.6, 13);
+const REST_LOOKAT_Y = 2.2;
 
 export default function CameraRig({ startIntro, onIntroDone }) {
   const { camera } = useThree();
@@ -74,8 +78,8 @@ export default function CameraRig({ startIntro, onIntroDone }) {
       onUpdate: () => {
         const p = progress.t;
         const angle = p * Math.PI * 2;
-        const radius = THREE.MathUtils.lerp(0.3, 6.8, p);
-        const y = THREE.MathUtils.lerp(5.8, 1.3, p);
+        const radius = THREE.MathUtils.lerp(0.3, REST_POSITION.z, p);
+        const y = THREE.MathUtils.lerp(5.8, REST_POSITION.y, p);
         camera.position.set(Math.sin(angle) * radius, y, Math.cos(angle) * radius);
         lookAtY.current = THREE.MathUtils.lerp(5, REST_LOOKAT_Y, p);
         camera.lookAt(0, lookAtY.current, 0);

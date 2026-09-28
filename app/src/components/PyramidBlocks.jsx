@@ -109,6 +109,15 @@ export default function PyramidBlocks({ onHoverChange }) {
     const target = blockData[index].position.clone().add(dir.multiplyScalar(0.6));
 
     gsap.killTweensOf([mesh.position, mesh.scale, mesh.rotation, mat]);
+    // Only pay the cost (and depth-sort risk) of a transparent material
+    // while a block is actually mid-fade. ~200 blocks permanently flagged
+    // transparent, even at opacity 1, breaks Three's depth sort once enough
+    // of them overlap on screen — the whole pyramid rendered as ghostly,
+    // overlapping glass. Keeping blocks opaque at rest fixes that.
+    mat.transparent = true;
+    mat.depthWrite = false;
+    mat.needsUpdate = true;
+
     gsap.to(mesh.position, { x: target.x, y: target.y, z: target.z, duration: 0.4, ease: 'power2.out' });
     gsap.to(mesh.scale, { x: 0.15, y: 0.15, z: 0.15, duration: 0.4, ease: 'power2.out' });
     gsap.to(mesh.rotation, {
@@ -136,12 +145,36 @@ export default function PyramidBlocks({ onHoverChange }) {
       .to(mesh.scale, { y: 1.5, duration: 0.32, ease: 'power2.out' })
       .to(mesh.scale, { y: 1, duration: 0.48, ease: 'power2.inOut' });
     gsap.to(mesh.rotation, { x: 0, z: 0, duration: 0.8, ease: 'elastic.out(1, 0.4)' });
-    gsap.to(mat, { opacity: 1, duration: 0.6, ease: 'power2.out' });
+    gsap.to(mat, {
+      opacity: 1,
+      duration: 0.6,
+      ease: 'power2.out',
+      onComplete: () => {
+        // Back to fully opaque, reliably-sorted rendering once at rest.
+        mat.transparent = false;
+        mat.depthWrite = true;
+        mat.needsUpdate = true;
+      },
+    });
   }
 
+  // R3F's `pointer` defaults to (0,0) — screen center — before the user has
+  // ever moved the mouse, which would otherwise make whatever block sits at
+  // frame-center look permanently "hovered" (popped out) on load. Gate
+  // hover detection behind a real pointer-move.
+  const hasPointerMoved = useRef(false);
+  useEffect(() => {
+    const mark = () => { hasPointerMoved.current = true; };
+    window.addEventListener('pointermove', mark, { once: true });
+    return () => window.removeEventListener('pointermove', mark);
+  }, []);
+
   useFrame((state) => {
-    raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObjects(meshRefs.current.filter(Boolean), false);
+    let hits = [];
+    if (hasPointerMoved.current) {
+      raycaster.setFromCamera(pointer, camera);
+      hits = raycaster.intersectObjects(meshRefs.current.filter(Boolean), false);
+    }
     const hoveredMesh = hits[0]?.object;
     const hoveredIndex = hoveredMesh ? hoveredMesh.userData.index : null;
 
@@ -193,7 +226,7 @@ export default function PyramidBlocks({ onHoverChange }) {
             color={b.color}
             roughness={0.9}
             metalness={0.0}
-            transparent
+            transparent={false}
             opacity={1}
           />
         </mesh>
