@@ -312,71 +312,120 @@ function updateRocks(dt) {
   }
 }
 
-// ---------- Small sandstorm: drifting dust particles + hazy gust sheets ----------
+// ---------- Big sandstorm: dense drifting dust + streaking sand + rolling gust walls ----------
 function makeSoftDustTexture() {
   const size = 64;
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const ctx = c.getContext('2d');
   const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0, 'rgba(255,238,205,0.85)');
-  grad.addColorStop(0.5, 'rgba(255,230,190,0.35)');
+  grad.addColorStop(0, 'rgba(255,238,205,0.9)');
+  grad.addColorStop(0.5, 'rgba(255,230,190,0.4)');
   grad.addColorStop(1, 'rgba(255,230,190,0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(c);
 }
+// An elongated, horizontally-streaked sprite for fast low sand — reads as
+// motion-blurred grains being dragged by the wind rather than round dots.
+function makeStreakTexture() {
+  const w = 128, h = 32;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createLinearGradient(0, 0, w, 0);
+  grad.addColorStop(0, 'rgba(255,232,195,0)');
+  grad.addColorStop(0.5, 'rgba(255,232,195,0.75)');
+  grad.addColorStop(1, 'rgba(255,232,195,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  return new THREE.CanvasTexture(c);
+}
 const dustSprite = makeSoftDustTexture();
+const streakSprite = makeStreakTexture();
 
-// Wind blows mostly along +X, with gentle turbulence — this is a *light*
-// gust, not a whiteout, so density and opacity stay low.
-const WIND_DIR = new THREE.Vector2(1, 0.18).normalize();
-const FIELD = 26; // half-extent of the particle field, centered on the pyramid
+// Wind blows mostly along +X, with turbulence — this is now a proper storm:
+// dense, fast, and tall enough to wash over the pyramid.
+const WIND_DIR = new THREE.Vector2(1, 0.22).normalize();
+const WIND_ANGLE = Math.atan2(WIND_DIR.y, WIND_DIR.x);
+const WIND_SPEED = 6.5;
+const FIELD = 32; // half-extent of the particle field, centered on the pyramid
 
-const PARTICLE_COUNT = 850;
+const PARTICLE_COUNT = 3600;
 const particleGeo = new THREE.BufferGeometry();
 const particlePos = new Float32Array(PARTICLE_COUNT * 3);
 const particleSeed = new Float32Array(PARTICLE_COUNT * 3); // speed, phase, freq
 for (let i = 0; i < PARTICLE_COUNT; i++) {
   const x = (Math.random() * 2 - 1) * FIELD;
-  const y = Math.random() * 4.2;
+  // Bias density toward the ground, with a thinner haze rising higher —
+  // that's what makes it read as a storm rolling across the dunes.
+  const y = Math.pow(Math.random(), 2.2) * 9;
   const z = (Math.random() * 2 - 1) * FIELD;
   particlePos.set([x, y, z], i * 3);
-  particleSeed.set([0.6 + Math.random() * 1.6, Math.random() * Math.PI * 2, 0.5 + Math.random() * 1.2], i * 3);
+  particleSeed.set([0.5 + Math.random() * 1.8, Math.random() * Math.PI * 2, 0.4 + Math.random() * 1.4], i * 3);
 }
 particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
 
 const particleMat = new THREE.PointsMaterial({
   map: dustSprite,
-  size: 0.32,
+  size: 0.55,
   sizeAttenuation: true,
   transparent: true,
-  opacity: 0.4,
+  opacity: 0.6,
   depthWrite: false,
   color: new THREE.Color('#E9CE9E'),
 });
 const dustParticles = new THREE.Points(particleGeo, particleMat);
 scene.add(dustParticles);
 
-// A few large, very faint camera-facing gust sheets for bigger hazy motion
-// layered behind/around the fine particles.
+// Fast, low, wind-aligned sand streaks for the "grains dragging past the
+// camera" close-in feel.
+const STREAK_COUNT = 90;
+const streaks = [];
+for (let i = 0; i < STREAK_COUNT; i++) {
+  const mat = new THREE.SpriteMaterial({
+    map: streakSprite,
+    transparent: true,
+    opacity: 0.35 + Math.random() * 0.25,
+    depthWrite: false,
+    color: new THREE.Color('#F0DFB8'),
+    rotation: WIND_ANGLE,
+  });
+  const sprite = new THREE.Sprite(mat);
+  const len = 1.4 + Math.random() * 2.6;
+  sprite.scale.set(len, len * 0.16, 1);
+  sprite.position.set((Math.random() * 2 - 1) * FIELD, 0.1 + Math.random() * 2.2, (Math.random() * 2 - 1) * FIELD);
+  scene.add(sprite);
+  streaks.push({ sprite, speed: WIND_SPEED * (1.4 + Math.random() * 1.2) });
+}
+
+// Large, rolling gust walls — big soft sheets that sweep across the whole
+// scene, thick enough to partially veil the pyramid as they pass.
 const gustSprites = [];
-const GUST_COUNT = 5;
+const GUST_COUNT = 11;
 for (let i = 0; i < GUST_COUNT; i++) {
   const mat = new THREE.SpriteMaterial({
     map: dustSprite,
     transparent: true,
-    opacity: 0.07 + Math.random() * 0.04,
+    opacity: 0.16 + Math.random() * 0.16,
     depthWrite: false,
-    color: new THREE.Color('#EFD9AC'),
+    color: new THREE.Color('#D9A868'),
   });
   const sprite = new THREE.Sprite(mat);
-  const scale = 10 + Math.random() * 8;
-  sprite.scale.set(scale, scale * 0.55, 1);
-  sprite.position.set((Math.random() * 2 - 1) * FIELD, 0.8 + Math.random() * 2.2, (Math.random() * 2 - 1) * FIELD);
+  const scale = 20 + Math.random() * 22;
+  sprite.scale.set(scale, scale * 0.6, 1);
+  sprite.position.set((Math.random() * 2 - 1) * FIELD, 0.4 + Math.random() * 5, (Math.random() * 2 - 1) * FIELD);
   scene.add(sprite);
-  gustSprites.push({ sprite, speed: 0.5 + Math.random() * 0.5 });
+  gustSprites.push({ sprite, speed: WIND_SPEED * (0.5 + Math.random() * 0.6) });
 }
+
+// Storm atmosphere: the sky/fog tint pulses between clear and hazy as gusts
+// roll through, instead of sitting at one flat color.
+const skyClear = new THREE.Color('#F7DFA8');
+const skyHazy = new THREE.Color('#C98A4A');
+const fogClear = new THREE.Color('#E3A85C');
+const fogHazy = new THREE.Color('#B87A3E');
+const tmpColor = new THREE.Color();
 
 function updateSandstorm(elapsed, dt) {
   const positions = particleGeo.attributes.position.array;
@@ -386,16 +435,27 @@ function updateSandstorm(elapsed, dt) {
     const phase = particleSeed[idx + 1];
     const freq = particleSeed[idx + 2];
 
-    positions[idx] += WIND_DIR.x * speed * dt * 1.6;
-    positions[idx + 2] += WIND_DIR.y * speed * dt * 1.6;
-    positions[idx + 1] += Math.sin(elapsed * freq + phase) * 0.05 * dt;
+    positions[idx] += WIND_DIR.x * speed * WIND_SPEED * dt;
+    positions[idx + 2] += WIND_DIR.y * speed * WIND_SPEED * dt;
+    positions[idx + 1] += Math.sin(elapsed * freq + phase) * 0.12 * dt;
 
     // Wrap around so the storm loops seamlessly against the wind direction
-    if (positions[idx] > FIELD) { positions[idx] -= FIELD * 2; positions[idx + 2] = (Math.random() * 2 - 1) * FIELD; }
+    if (positions[idx] > FIELD) {
+      positions[idx] -= FIELD * 2;
+      positions[idx + 2] = (Math.random() * 2 - 1) * FIELD;
+      positions[idx + 1] = Math.pow(Math.random(), 2.2) * 9;
+    }
     if (positions[idx + 2] > FIELD) positions[idx + 2] -= FIELD * 2;
     if (positions[idx + 2] < -FIELD) positions[idx + 2] += FIELD * 2;
   }
   particleGeo.attributes.position.needsUpdate = true;
+
+  for (const s of streaks) {
+    s.sprite.position.x += WIND_DIR.x * s.speed * dt;
+    s.sprite.position.z += WIND_DIR.y * s.speed * dt;
+    if (s.sprite.position.x > FIELD) s.sprite.position.x -= FIELD * 2;
+    if (s.sprite.position.z > FIELD) s.sprite.position.z -= FIELD * 2;
+  }
 
   for (const g of gustSprites) {
     g.sprite.position.x += WIND_DIR.x * g.speed * dt;
@@ -404,8 +464,12 @@ function updateSandstorm(elapsed, dt) {
     if (g.sprite.position.z > FIELD) g.sprite.position.z -= FIELD * 2;
   }
 
-  // Subtle "gust breathing" — fog thickens and thins a little over time
-  scene.fog.far = 90 + Math.sin(elapsed * 0.15) * 8;
+  // Gust breathing — sky/fog swing between clear and hazy as the storm rolls
+  const gust = (Math.sin(elapsed * 0.18) + 1) / 2;
+  scene.background = tmpColor.copy(skyClear).lerp(skyHazy, gust * 0.6);
+  scene.fog.color.copy(fogClear).lerp(fogHazy, gust * 0.6);
+  scene.fog.far = 55 - gust * 20;
+  scene.fog.near = 6;
 }
 
 // ---------- Resize ----------
