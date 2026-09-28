@@ -1,50 +1,59 @@
-import { useMemo, useRef, useEffect } from 'react';
+import { memo, useMemo, useRef, useEffect } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
+import { useTexture } from '@react-three/drei';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import * as THREE from 'three';
 import gsap from 'gsap';
 
 const ROCK_COLORS = ['#C19A6B', '#D2B48C', '#E1C699', '#B8956A'];
 const PYRAMID_HEIGHT = 5;
 const PYRAMID_BASE = 6;
-const LAYERS = 8;
+// Real pyramid faces are many shallow courses of stones that are wider than
+// they are tall — 8 tall courses read as stacked boxes, 18 short ones read
+// as masonry.
+const LAYERS = 18;
+const GAP = 0.012;
+const TARGET_STONE_SIZE = 0.42;
 
-// Perimeter-shell layout: each of the 8 courses is a ring of blocks around
-// its own (shrinking) square footprint — that taper is what actually makes
-// it read as a pyramid. Block size is derived from each course's real
-// footprint width divided by its block count, so stones tile edge-to-edge
-// with only the 0.01 gap (touching both within a ring and between courses
-// stacked on top of each other) instead of leaving daylight gaps that let
-// you see straight through the shell into the hollow interior.
-const GAP = 0.01;
-const TARGET_STONE_SIZE = 0.46;
+// Deterministic per-position noise: face vertices of a box that share a
+// corner get the same displacement, so erosion never opens seams.
+function hash(x, y, z, seed) {
+  const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + seed * 19.19) * 43758.5453;
+  return s - Math.floor(s);
+}
 
 function buildBlockData() {
   const blocks = [];
-  const courseHeight = PYRAMID_HEIGHT / LAYERS; // 0.625
+  const courseHeight = PYRAMID_HEIGHT / LAYERS;
 
   for (let layer = 0; layer < LAYERS; layer++) {
     const half = (PYRAMID_BASE / 2) * (1 - layer / LAYERS);
     const width = half * 2;
-    let n = Math.max(1, Math.round(width / TARGET_STONE_SIZE));
-    if (layer === LAYERS - 1) n = Math.min(n, 2); // apex cap
-    const spacing = n > 1 ? width / n : width;
+    const n = Math.max(1, Math.round(width / TARGET_STONE_SIZE));
+    const spacing = width / n;
     const yCenter = layer * courseHeight + courseHeight / 2;
 
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
-        const isPerimeter = n <= 2 || i === 0 || i === n - 1 || j === 0 || j === n - 1;
+        // Hollow shell for big courses; small top courses are filled so you
+        // can't see down into the core from above.
+        const isPerimeter = n <= 3 || i === 0 || i === n - 1 || j === 0 || j === n - 1;
         if (!isPerimeter) continue;
 
         const x = -half + spacing / 2 + i * spacing;
         const z = -half + spacing / 2 + j * spacing;
+        // Ragged face: outer stones sit slightly proud or recessed at random
+        const outward = new THREE.Vector3(Math.sign(x) * (i === 0 || i === n - 1 ? 1 : 0), 0, Math.sign(z) * (j === 0 || j === n - 1 ? 1 : 0));
+        const proud = (Math.random() - 0.35) * 0.035;
 
         blocks.push({
-          position: new THREE.Vector3(x, yCenter, z),
-          width: Math.max(0.1, spacing - GAP),
-          height: Math.max(0.1, courseHeight - GAP),
-          depth: Math.max(0.1, spacing - GAP),
+          position: new THREE.Vector3(x + outward.x * proud, yCenter - Math.random() * 0.006, z + outward.z * proud),
+          yaw: (Math.random() - 0.5) * 0.05,
+          width: spacing - GAP - Math.random() * 0.025,
+          height: courseHeight - GAP - Math.random() * 0.012,
+          depth: spacing - GAP - Math.random() * 0.025,
           color: ROCK_COLORS[Math.floor(Math.random() * ROCK_COLORS.length)],
-          seed: Math.random() * Math.PI * 2,
+          seed: Math.random() * 1000,
         });
       }
     }
@@ -52,24 +61,70 @@ function buildBlockData() {
   return blocks;
 }
 
-function jitterGeometry(geo, amount) {
+// Weathered limestone: rounded base shape, corners and edges eroded
+// inward more than face centres, fine surface pitting, randomized texture
+// placement per stone, and baked darkening in the joints/underside so each
+// course reads with depth even in flat light.
+function makeStoneGeometry(b) {
+  const radius = Math.min(0.045, b.height * 0.2);
+  const geo = new RoundedBoxGeometry(b.width, b.height, b.depth, 2, radius);
   const pos = geo.attributes.position;
+  const hw = b.width / 2, hh = b.height / 2, hd = b.depth / 2;
+  const colors = new Float32Array(pos.count * 3);
+  const base = new THREE.Color(b.color);
+  const v = new THREE.Vector3();
+
   for (let i = 0; i < pos.count; i++) {
-    pos.setXYZ(
-      i,
-      pos.getX(i) + (Math.random() - 0.5) * amount,
-      pos.getY(i) + (Math.random() - 0.5) * amount,
-      pos.getZ(i) + (Math.random() - 0.5) * amount
-    );
+    v.fromBufferAttribute(pos, i);
+    const nx = Math.abs(v.x / hw), ny = Math.abs(v.y / hh), nz = Math.abs(v.z / hd);
+    const edge = Math.max(nx * ny, ny * nz, nx * nz); // ~1 on edges/corners
+    const corner = nx * ny * nz;
+    const qx = Math.round(v.x * 1e4) / 1e4, qy = Math.round(v.y * 1e4) / 1e4, qz = Math.round(v.z * 1e4) / 1e4;
+    const r1 = hash(qx, qy, qz, b.seed);
+    const r2 = hash(qz, qx, qy, b.seed + 7);
+
+    const erosion = 1 - (edge * edge * 0.035 + corner * 0.1) * (0.4 + r1);
+    const pit = 1 - r2 * 0.012;
+    v.multiplyScalar(erosion * pit);
+    pos.setXYZ(i, v.x, v.y, v.z);
+
+    // Joint/underside occlusion + slight per-vertex tonal variation
+    const up = (v.y / hh + 1) / 2;
+    const shade = (0.72 + 0.28 * up) * (1 - edge * 0.12) * (0.94 + r1 * 0.1);
+    // The source texture is orange cracked earth; boosting blue/green in
+    // the tint neutralizes it toward pale limestone instead of brick.
+    colors[i * 3] = base.r * shade * 1.2;
+    colors[i * 3 + 1] = base.g * shade * 1.3;
+    colors[i * 3 + 2] = base.b * shade * 1.55;
   }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const uv = geo.attributes.uv;
+  const s = 0.35 + Math.random() * 0.3;
+  const ou = Math.random(), ov = Math.random();
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * s + ou, uv.getY(i) * s + ov);
+
   geo.computeVertexNormals();
   return geo;
 }
 
 const CENTER = new THREE.Vector3(0, PYRAMID_HEIGHT * 0.35, 0);
 
-export default function PyramidBlocks({ onHoverChange }) {
+function PyramidBlocks({ onHoverChange }) {
   const blockData = useMemo(buildBlockData, []);
+  const [albedo, normal, rough] = useTexture([
+    './assets/textures/earth/albedo.jpg',
+    './assets/textures/earth/normal.jpg',
+    './assets/textures/earth/roughness.jpg',
+  ]);
+  useMemo(() => {
+    for (const t of [albedo, normal, rough]) {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = 8;
+    }
+    albedo.colorSpace = THREE.SRGBColorSpace;
+  }, [albedo, normal, rough]);
+  const normalScale = useMemo(() => new THREE.Vector2(1.3, 1.3), []);
 
   // Precompute each block's 2 nearest neighbors once — used to grow the
   // hovered block into a group of 3 for the pop-out effect.
@@ -83,10 +138,7 @@ export default function PyramidBlocks({ onHoverChange }) {
     });
   }, [blockData]);
 
-  const geometries = useMemo(
-    () => blockData.map((b) => jitterGeometry(new THREE.BoxGeometry(b.width, b.height, b.depth), 0.02)),
-    [blockData]
-  );
+  const geometries = useMemo(() => blockData.map(makeStoneGeometry), [blockData]);
 
   const meshRefs = useRef([]);
   const materialRefs = useRef([]);
@@ -217,15 +269,20 @@ export default function PyramidBlocks({ onHoverChange }) {
           ref={(m) => (meshRefs.current[i] = m)}
           geometry={geometries[i]}
           position={b.position}
+          rotation={[0, b.yaw, 0]}
           castShadow
           receiveShadow
           userData={{ index: i }}
         >
           <meshStandardMaterial
             ref={(m) => (materialRefs.current[i] = m)}
-            color={b.color}
-            roughness={0.9}
-            metalness={0.0}
+            vertexColors
+            map={albedo}
+            normalMap={normal}
+            normalScale={normalScale}
+            roughnessMap={rough}
+            roughness={1}
+            metalness={0}
             transparent={false}
             opacity={1}
           />
@@ -234,3 +291,5 @@ export default function PyramidBlocks({ onHoverChange }) {
     </group>
   );
 }
+
+export default memo(PyramidBlocks);
